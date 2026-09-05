@@ -46,6 +46,10 @@ static portMUX_TYPE listMux = portMUX_INITIALIZER_UNLOCKED;
 static uint64_t allowH[32], extraH[32];
 static int      allowN = 0, extraN = 0;
 
+static const int      MAX_LOCAL = 16;             // LOCAL_NAMES answered by this board
+static const uint32_t LOCAL_TTL = 120;
+static uint64_t localH[MAX_LOCAL]; static uint8_t localIp[MAX_LOCAL][4]; static int localN = 0;
+
 struct Pending {
   bool used; uint8_t tries; uint16_t ourId, origId, clientPort, len;
   uint32_t clientIp, sentMs; uint8_t pkt[PKT_MAX];
@@ -105,6 +109,13 @@ static String jsonEsc(const char* s) {
 }
 
 // Is this name (or any parent domain) blocked?
+static const uint8_t* localLookup(const char* name) {
+  if (!localN) return nullptr;
+  uint64_t h = fnv1a(name, strlen(name));
+  for (int i = 0; i < localN; i++) if (localH[i] == h) return localIp[i];
+  return nullptr;
+}
+
 static bool isBlocked(const char* name) {
   size_t total = strlen(name);
   if (!total) return false;
@@ -167,18 +178,24 @@ static size_t parseQuery(const uint8_t* p, size_t len, char* name, size_t cap, u
 }
 
 // Build a "blocked" answer: A -> 0.0.0.0, AAAA -> ::, anything else -> NOERROR with no records.
-static size_t buildBlockResponse(const uint8_t* q, size_t qend, uint16_t qtype, uint8_t* out) {
+// Reply to the question in q. ip4 == nullptr: sinkhole (A -> 0.0.0.0, AAAA -> ::, others empty).
+// ip4 set: a local name (A -> ip4; anything else empty NOERROR, so clients fall back to IPv4).
+static size_t buildAnswer(const uint8_t* q, size_t qend, uint16_t qtype, uint8_t* out, const uint8_t* ip4, uint32_t ttl) {
   memcpy(out, q, qend);
   out[2] = 0x80 | (q[2] & 0x01);                   // QR=1, keep RD
   out[3] = 0x80;                                   // RA=1, RCODE=0
   out[4] = 0; out[5] = 1; out[6] = 0; out[7] = 0; out[8] = 0; out[9] = 0; out[10] = 0; out[11] = 0;
   size_t n = qend;
-  if (qtype == 1 || qtype == 28) {
+  bool answer = ip4 ? (qtype == 1) : (qtype == 1 || qtype == 28);
+  if (answer) {
     out[7] = 1;                                    // ANCOUNT = 1
     uint16_t rdl = (qtype == 1) ? 4 : 16;
-    const uint8_t rr[] = { 0xC0, 0x0C, 0x00, (uint8_t)qtype, 0x00, 0x01, 0, 0, 0, BLOCK_TTL, (uint8_t)(rdl >> 8), (uint8_t)rdl };
+    const uint8_t rr[] = { 0xC0, 0x0C, 0x00, (uint8_t)qtype, 0x00, 0x01,
+                           (uint8_t)(ttl >> 24), (uint8_t)(ttl >> 16), (uint8_t)(ttl >> 8), (uint8_t)ttl,
+                           (uint8_t)(rdl >> 8), (uint8_t)rdl };
     memcpy(out + n, rr, sizeof rr); n += sizeof rr;
-    memset(out + n, 0, rdl); n += rdl;
+    if (ip4) memcpy(out + n, ip4, 4); else memset(out + n, 0, rdl);
+    n += rdl;
   }
   return n;
 }
@@ -191,12 +208,13 @@ static void onClientPacket(AsyncUDPPacket& p) {
   uint32_t ip = (uint32_t)p.remoteIP();
   uint32_t pu = pausedUntilMs;
   bool paused = pu && (int32_t)(millis() - pu) < 0;
-  bool blocked = !paused && isBlocked(name);
+  const uint8_t* local = localLookup(name);
+  bool blocked = !local && !paused && isBlocked(name);
   noteQuery(ip, name, qtype, blocked);
 
-  if (blocked && qend <= 300) {
+  if ((blocked || local) && qend <= 300) {
     uint8_t out[300 + 32];
-    size_t n = buildBlockResponse(d, qend, qtype, out);
+    size_t n = buildAnswer(d, qend, qtype, out, local, local ? LOCAL_TTL : BLOCK_TTL);
     p.write(out, n);
     return;
   }
@@ -449,6 +467,14 @@ void dnsblockBegin() {
   memset(pend, 0, sizeof pend);
   for (int i = 0; ALLOWLIST[i] && allowN < 32; i++)   { String s = ALLOWLIST[i];   s.toLowerCase(); allowH[allowN++] = fnv1a(s.c_str(), s.length()); }
   for (int i = 0; EXTRA_BLOCK[i] && extraN < 32; i++) { String s = EXTRA_BLOCK[i]; s.toLowerCase(); extraH[extraN++] = fnv1a(s.c_str(), s.length()); }
+  for (int i = 0; LOCAL_NAMES[i].name && localN < MAX_LOCAL; i++) {
+    IPAddress a; if (!a.fromString(LOCAL_NAMES[i].ip)) { Serial.printf("[adblock] bad LOCAL_NAMES ip for %s\n", LOCAL_NAMES[i].name); continue; }
+    String s = LOCAL_NAMES[i].name; s.toLowerCase();
+    localH[localN] = fnv1a(s.c_str(), s.length());
+    for (int k = 0; k < 4; k++) localIp[localN][k] = a[k];
+    localN++;
+  }
+  if (localN) Serial.printf("[adblock] %d local name(s) configured\n", localN);
 
   if (!FFat.begin(true)) Serial.println("[adblock] FFat mount failed: no cache, will fetch on every boot");
   else {
@@ -485,7 +511,7 @@ String dnsblockJson() {
   j += ",\"updating\":"; j += upd ? "true" : "false";
   j += ",\"update_msg\":\"" + jsonEsc(lastUpdateMsg) + "\"";
   j += ",\"upstream\":[\"" + UPSTREAM_DNS_1.toString() + "\",\"" + UPSTREAM_DNS_2.toString() + "\"]";
-  j += ",\"listen\":\"" + WiFi.localIP().toString() + "\"";
+  j += ",\"listen\":\"" + WiFi.localIP().toString() + "\",\"local_names\":" + String(localN);
   j += ",\"psram_free_kb\":" + String((unsigned)(ESP.getFreePsram() / 1024)) + ",\"heap_free_kb\":" + String((unsigned)(ESP.getFreeHeap() / 1024));
   j += ",\"total\":" + String(snap.total) + ",\"blocked\":" + String(snap.blocked) + ",\"forwarded\":" + String(snap.forwarded)
      + ",\"timeouts\":" + String(to) + ",\"overflow\":" + String(ov);

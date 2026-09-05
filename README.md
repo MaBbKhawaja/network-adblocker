@@ -1,4 +1,6 @@
-# netmon — ESP32-S3 internet monitor + DNS ad blocker
+# network-adblocker — whole-home ad blocking on an ESP32-S3
+
+Firmware name: `netmon` (the board answers at http://netmon.local).
 
 One ESP32-S3 on your Wi-Fi that:
 - **blocks ads and trackers for every device** (a DNS sinkhole, Pi-hole style): ~440,000 domains from three
@@ -11,9 +13,11 @@ One ESP32-S3 on your Wi-Fi that:
   recent queries, pause / resume / update buttons, latency sparklines, outage log
 
 ## Files
+- `invidious/` — a private, ad-free YouTube front-end for the household (see below)
 - `netmon/netmon.ino` — monitor, web server, dashboard
 - `netmon/dnsblock.cpp` / `.h` — the DNS server, blocklist fetch/cache, stats
 - `netmon/dnsconfig.h` — blocklist URLs, allow/extra-block lists, upstream resolvers
+- `netmon/dnsconfig.h` also holds `LOCAL_NAMES`: names the board answers itself, e.g. `yt.home` → the front-end host
 - `netmon/secrets.h` — Wi-Fi credentials, fixed IP, optional ntfy topic (gitignored; see `secrets.example.h`)
 - `build.sh` — `./build.sh compile | upload | monitor | all` (set `PORT=` to override the serial port)
 
@@ -30,6 +34,21 @@ Edit `netmon/dnsconfig.h`. Accepts hosts format, plain domains, `*.domain` wildc
 Sizes as of Sep 2026: StevenBlack 80k · oisd big 256k · hagezi pro 225k → 440k unique (3.5 MB PSRAM).
 Budget is ~480k unique domains; hagezi's threat-intel list (2.2M) is far too big for this board.
 Note: oisd's server rejects HTTP/1.0, hence the streaming HTTP/1.1 downloader.
+
+## YouTube ads: the Invidious front-end
+DNS blocking cannot remove YouTube's own video ads (they stream from the same servers as the video), so
+`invidious/` runs [Invidious](https://github.com/iv-org/invidious), an open-source YouTube front-end with no
+ads or tracking, as three Docker containers (web app, "companion" that handles Google's anti-bot checks,
+Postgres). Open **http://yt.home** on any device that uses the board for DNS (or `http://<host-ip>/`).
+
+- Start / update: `cd invidious && ./setup.sh` (`--update` pulls new images, `--new-keys` regenerates secrets)
+- Invidious must be restarted at least daily: `./setup.sh --daily-restart` installs a 04:30 launchd job on macOS
+- Secrets live in `invidious/.env` (gitignored); `invidious/upstream/` is a sparse clone for the DB schema
+- The host must stay on. Currently the MacBook Pro (192.168.1.152); plan is a Raspberry Pi 5. When it moves,
+  change the IP in `LOCAL_NAMES` and reflash.
+- Known: the JSON API (`/api/v1/videos/…`, used by third-party apps) crashes on storyboards with the current
+  companion; the website and playback (360p progressive and DASH up to 1080p) work.
+- Browser tip: the LibRedirect extension rewrites every youtube.com link to your instance automatically.
 
 ## API
 `GET /api/status`, `GET /api/history`, `GET /api/dns`, `POST /api/pause?min=N`, `POST /api/resume`, `POST /api/update`

@@ -26,6 +26,15 @@ static const char* EXTRA_BLOCK[] = {
   nullptr
 };
 
+// Names this board answers itself (exact match), so LAN services get a friendly address
+// without touching the router. Visible only to devices that use this board for DNS.
+// A queries get the IP; AAAA and others get an empty NOERROR. Keep the trailing entry.
+struct LocalName { const char* name; const char* ip; };
+static const LocalName LOCAL_NAMES[] = {
+  { "yt.home", "192.168.1.152" },   // Invidious, the ad-free YouTube front-end (see ../invidious)
+  { nullptr, nullptr }
+};
+
 // Where non-blocked queries go. The second is tried if the first doesn't answer in 1.5 s.
 #define UPSTREAM_DNS_1  IPAddress(1, 1, 1, 1)   // Cloudflare
 #define UPSTREAM_DNS_2  IPAddress(8, 8, 8, 8)   // Google
