@@ -178,11 +178,32 @@ router's Static DHCP first).
 
 ## API (JSON)
 
-`GET /api/status` · `GET /api/history` · `GET /api/dns` · `POST /api/pause?min=N` · `POST /api/resume` ·
-`POST /api/update` · `POST /api/blocking?on=1|0` · `GET /api/lists` ·
-`POST /api/lists?list=allow|block|exempt&add=…|remove=…` · `POST /api/device?ip=…&name=…` ·
-`POST /api/device?ip=…&pause=MINUTES` · `GET /api/yt` · `GET /api/yt/rules` · `POST /api/yt/stats` ·
-`POST /api/yt/enforce?on=1|0` · `GET /extension` · `GET /extension/ytguard.zip`
+Everything the dashboard does is an ordinary HTTP call to the board, so scripts, shortcuts and home-automation tools can
+do the same. `GET` reads, `POST` changes. Replace `adblocker.local` with the board's IP if your device can't resolve
+`.local` names. Try one in a browser: http://adblocker.local/api/dns
+
+| Call | What it does | Example |
+|---|---|---|
+| `GET /api/status` | Internet health: state, latency to router/Cloudflare/Google, outages, uptime | `curl http://adblocker.local/api/status` |
+| `GET /api/history` | The last 15 minutes of latency samples (for the sparklines) | |
+| `GET /api/dns` | Ad-blocker stats: totals, per-device counts and names, recent queries, blocklist size | `curl http://adblocker.local/api/dns` |
+| `POST /api/pause?min=N` | Pause blocking for the whole house for N minutes | `curl -X POST "http://adblocker.local/api/pause?min=30"` |
+| `POST /api/resume` | End a pause | |
+| `POST /api/update` | Re-download the blocklists now | |
+| `POST /api/blocking?on=1\|0` | The on/off switch: off = forward everything, block nothing (remembered across reboots) | `curl -X POST "http://adblocker.local/api/blocking?on=0"` |
+| `GET /api/lists` | The Always-allow / Always-block / YouTube-exempt lists and device names | |
+| `POST /api/lists?list=allow\|block\|exempt&add=…` | Add a domain (or an IP for `exempt`); use `&remove=…` to remove | `curl -X POST "http://adblocker.local/api/lists?list=allow&add=example.com"` |
+| `POST /api/device?ip=…&name=…` | Name a device (empty name removes it) | `curl -X POST "http://adblocker.local/api/device?ip=192.168.1.151&name=Ali%27s%20phone"` |
+| `POST /api/device?ip=…&pause=MINUTES` | Pause blocking for one device (0 resumes) | `curl -X POST "http://adblocker.local/api/device?ip=192.168.1.151&pause=60"` |
+| `GET /api/yt` | YouTube extension counts per browser, and the Require-the-extension switch state | |
+| `GET /api/yt/rules` | The rule set the extension downloads (what to strip, hide, skip) | |
+| `POST /api/yt/stats` | Used by the extension to report what it removed (JSON body) | |
+| `POST /api/yt/enforce?on=1\|0` | Require the extension for YouTube in browsers (remembered across reboots) | |
+| `GET /extension` | The install page for the extension | open in a browser |
+| `GET /extension/ytguard.zip` | The extension itself, zipped | |
+
+Examples of what people build on this: a phone shortcut that pauses blocking for 10 minutes, a home-automation rule that
+turns blocking off during a game's download window, or a small widget showing today's blocked count.
 
 ## Possible extensions (not planned here)
 
