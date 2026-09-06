@@ -174,11 +174,12 @@ router's Static DHCP first).
 `POST /api/device?ip=…&pause=MINUTES` · `GET /api/yt` · `GET /api/yt/rules` · `POST /api/yt/stats` ·
 `POST /api/yt/enforce?on=1|0` · `GET /extension` · `GET /extension/ytguard.zip`
 
-## Roadmap
+## Possible extensions (not planned for this household)
 
-1. **Home VPN** on a Raspberry Pi 5 (Tailscale): phones keep the board's blocking on mobile data and away from home.
-2. **Pi dashboard** with history over weeks, pulling from the boards.
-3. **Android app** as a remote control for the boards (pause, switches, notifications).
+- **Home VPN** on an always-on computer (Raspberry Pi with WireGuard): phones would keep the board's blocking away
+  from home. Needs a public IP or a coordination service; the ESP32 itself cannot do it.
+- **Android app** as a remote control for the board (pause, switches, notifications), using the JSON API above.
+- **Hot standby**: a second board taking over the first one's address automatically if it dies.
 
 ## License
 
