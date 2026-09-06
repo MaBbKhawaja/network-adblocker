@@ -1,0 +1,26 @@
+/* netmon YouTube guard — cosmetic defaults. One rule per selector on purpose: an unsupported selector
+   (e.g. :has in an old browser) then only disables itself. The live list comes from the ESP32 rules and
+   is injected by guard.js; this file covers the first paint. */
+#masthead-ad { display: none !important; }
+#player-ads { display: none !important; }
+ytd-ad-slot-renderer { display: none !important; }
+ytd-in-feed-ad-layout-renderer { display: none !important; }
+ytd-promoted-sparkles-web-renderer { display: none !important; }
+ytd-display-ad-renderer { display: none !important; }
+ytd-banner-promo-renderer { display: none !important; }
+ytd-statement-banner-renderer { display: none !important; }
+ytd-promoted-video-renderer { display: none !important; }
+ytd-compact-promoted-video-renderer { display: none !important; }
+ytd-action-companion-ad-renderer { display: none !important; }
+ytd-merch-shelf-renderer { display: none !important; }
+ytd-rich-item-renderer:has(ytd-ad-slot-renderer) { display: none !important; }
+ytd-rich-section-renderer:has(ytd-statement-banner-renderer) { display: none !important; }
+ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-ads"] { display: none !important; }
+.ytp-ad-overlay-container { display: none !important; }
+.ytp-ad-text-overlay { display: none !important; }
+.ytp-ad-image-overlay { display: none !important; }
+ytd-popup-container:has(ytd-enforcement-message-view-model) { display: none !important; }
+tp-yt-paper-dialog:has(ytd-enforcement-message-view-model) { display: none !important; }
+ytm-promoted-video-renderer { display: none !important; }
+ytm-companion-ad-renderer { display: none !important; }
+ytm-promoted-sparkles-web-renderer { display: none !important; }

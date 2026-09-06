@@ -58,7 +58,7 @@ static Pending      pend[MAX_PENDING];
 static uint16_t     nextId = 1;
 static portMUX_TYPE pendMux = portMUX_INITIALIZER_UNLOCKED;
 
-struct DnsClient { uint32_t ip, q, b, lastMs; };
+struct DnsClient { uint32_t ip, q, b, lastMs; uint32_t ytMs, extMs; };   // ytMs: last browser-YouTube lookup; extMs: last extension check-in; 0 = never
 struct Recent { uint32_t t, ip; uint16_t qtype; uint8_t blocked; char name[56]; };
 struct Stats {
   uint32_t total, blocked, forwarded;
@@ -75,6 +75,35 @@ static volatile bool     updateRequested = false, updating = false;
 static char              lastUpdateMsg[120] = "not fetched yet";
 static uint32_t          lastAttemptMs = 0;
 static volatile bool     cacheStale = false;   // cache built from a different URL set / old format
+static volatile bool     blockingOff = false;  // dashboard switch per board: off = forward everything, block nothing
+static volatile bool     ytEnforce = false;    // dashboard switch: YouTube in a browser needs the extension
+static volatile uint32_t ytEnforced = 0;       // lookups held back by that switch
+static const uint32_t    EXT_FRESH_MS = 30UL * 60UL * 1000UL;   // an extension check-in counts for this long
+static uint32_t exemptIp[16]; static int exemptN = 0;
+
+// ---------------- Runtime settings: edited on the dashboard, saved in FFat, merged with dnsconfig.h ----------------
+static const int MAX_RT = 64, MAX_RT_EXEMPT = 32, MAX_NAMES = 48, MAX_DPAUSE = 16;
+struct RtEntry { char text[64]; uint64_t h; uint32_t ip; };
+static RtEntry rtAllow[MAX_RT], rtBlock[MAX_RT], rtExempt[MAX_RT_EXEMPT];
+static int rtAllowN = 0, rtBlockN = 0, rtExemptN = 0;
+struct DevName  { uint32_t ip; char name[25]; };  static DevName  names[MAX_NAMES]; static int namesN = 0;
+struct DevPause { uint32_t ip, untilMs; };        static DevPause dpause[MAX_DPAUSE]; static int dpauseN = 0;
+static portMUX_TYPE cfgMux = portMUX_INITIALIZER_UNLOCKED;
+static bool ffatOk = false;
+// Copies taken under cfgMux and used outside it: file writes and String building must never happen
+// inside a critical section (interrupts are off there, and flash I/O or malloc will crash the board).
+static RtEntry cfgCopy[MAX_RT]; static DevName namesCopy[MAX_NAMES];
+static int snapshotList(int which) {
+  int n = 0;
+  portENTER_CRITICAL(&cfgMux);
+  if (which == 0) { n = rtAllowN;  memcpy(cfgCopy, rtAllow,  sizeof(RtEntry) * n); }
+  if (which == 1) { n = rtBlockN;  memcpy(cfgCopy, rtBlock,  sizeof(RtEntry) * n); }
+  if (which == 2) { n = rtExemptN; memcpy(cfgCopy, rtExempt, sizeof(RtEntry) * n); }
+  if (which == 3) { n = namesN;    memcpy(namesCopy, names,  sizeof(DevName) * n); }
+  portEXIT_CRITICAL(&cfgMux);
+  return n;
+}
+static void loadSettings();
 
 // ---------------- small helpers ----------------
 static uint64_t fnv1a(const char* s, size_t n) {
@@ -116,6 +145,35 @@ static const uint8_t* localLookup(const char* name) {
   return nullptr;
 }
 
+static bool rtHas(const RtEntry* a, int n, uint64_t h) {
+  bool r = false;
+  portENTER_CRITICAL(&cfgMux);
+  for (int i = 0; i < n; i++) if (a[i].h == h) { r = true; break; }
+  portEXIT_CRITICAL(&cfgMux);
+  return r;
+}
+static bool rtExemptHas(uint32_t ip) {
+  bool r = false;
+  portENTER_CRITICAL(&cfgMux);
+  for (int i = 0; i < rtExemptN; i++) if (rtExempt[i].ip == ip) { r = true; break; }
+  portEXIT_CRITICAL(&cfgMux);
+  return r;
+}
+static uint32_t devicePausedS(uint32_t ip) {   // seconds of per-device pause left, 0 = none
+  uint32_t r = 0, now = millis();
+  portENTER_CRITICAL(&cfgMux);
+  for (int i = 0; i < dpauseN; i++) if (dpause[i].ip == ip) { int32_t left = (int32_t)(dpause[i].untilMs - now); r = left > 0 ? (uint32_t)left / 1000 : 0; break; }
+  portEXIT_CRITICAL(&cfgMux);
+  return r;
+}
+static String nameOf(uint32_t ip) {             // "" when unnamed
+  char buf[25] = "";
+  portENTER_CRITICAL(&cfgMux);
+  for (int i = 0; i < namesN; i++) if (names[i].ip == ip) { memcpy(buf, names[i].name, sizeof buf); break; }
+  portEXIT_CRITICAL(&cfgMux);
+  return String(buf);
+}
+
 static bool isBlocked(const char* name) {
   size_t total = strlen(name);
   if (!total) return false;
@@ -124,14 +182,24 @@ static bool isBlocked(const char* name) {
   const char* p = name;
   for (;;) {
     uint64_t h = fnv1a(p, total - (size_t)(p - name));
-    if (inSmall(allowH, allowN, h)) return false;
-    if (inSmall(extraH, extraN, h)) return true;
+    if (inSmall(allowH, allowN, h) || rtHas(rtAllow, rtAllowN, h)) return false;
+    if (inSmall(extraH, extraN, h) || rtHas(rtBlock, rtBlockN, h)) return true;
     if (arr && inSorted(arr, n, h)) return true;
     const char* dot = strchr(p, '.');
     if (!dot) return false;
     p = dot + 1;
     if (!strchr(p, '.')) return false;      // reached the bare TLD: stop
   }
+}
+
+static bool isYtBrowserName(const char* n) { return !strcasecmp(n, "www.youtube.com") || !strcasecmp(n, "m.youtube.com") || !strcasecmp(n, "youtube.com"); }
+static bool ytExempt(uint32_t ip) { for (int i = 0; i < exemptN; i++) if (exemptIp[i] == ip) return true; return rtExemptHas(ip); }
+static bool extRecent(uint32_t ip) {
+  bool r = false; uint32_t now = millis();
+  portENTER_CRITICAL(&statMux);
+  for (int i = 0; i < st.nClients; i++) if (st.clients[i].ip == ip) { uint32_t e = st.clients[i].extMs; r = e && (now - e) < EXT_FRESH_MS; break; }
+  portEXIT_CRITICAL(&statMux);
+  return r;
 }
 
 static void noteQuery(uint32_t ip, const char* name, uint16_t qtype, bool blocked) {
@@ -143,9 +211,10 @@ static void noteQuery(uint32_t ip, const char* name, uint16_t qtype, bool blocke
   if (!c) {
     if (st.nClients < MAX_CLIENTS) c = &st.clients[st.nClients++];
     else { c = &st.clients[0]; for (int i = 1; i < MAX_CLIENTS; i++) if (st.clients[i].lastMs < c->lastMs) c = &st.clients[i]; }
-    c->ip = ip; c->q = 0; c->b = 0;
+    c->ip = ip; c->q = 0; c->b = 0; c->ytMs = 0; c->extMs = 0;
   }
   c->q++; if (blocked) c->b++; c->lastMs = ms;
+  if (!strcasecmp(name, "www.youtube.com") || !strcasecmp(name, "m.youtube.com")) c->ytMs = ms ? ms : 1;
   Recent& r = st.recent[st.recentHead];
   r.t = t; r.ip = ip; r.qtype = qtype; r.blocked = blocked;
   strncpy(r.name, name, sizeof(r.name) - 1); r.name[sizeof(r.name) - 1] = 0;
@@ -207,9 +276,11 @@ static void onClientPacket(AsyncUDPPacket& p) {
   if (!qend) return;
   uint32_t ip = (uint32_t)p.remoteIP();
   uint32_t pu = pausedUntilMs;
-  bool paused = pu && (int32_t)(millis() - pu) < 0;
+  bool paused = blockingOff || (pu && (int32_t)(millis() - pu) < 0) || devicePausedS(ip) > 0;
   const uint8_t* local = localLookup(name);
   bool blocked = !local && !paused && isBlocked(name);
+  // "Require the extension": hold YouTube back from browsers that have no extension checking in
+  if (!blocked && !local && !paused && ytEnforce && isYtBrowserName(name) && !ytExempt(ip) && !extRecent(ip)) { blocked = true; ytEnforced = ytEnforced + 1; }
   noteQuery(ip, name, qtype, blocked);
 
   if ((blocked || local) && qend <= 300) {
@@ -475,10 +546,13 @@ void dnsblockBegin() {
     localN++;
   }
   if (localN) Serial.printf("[adblock] %d local name(s) configured\n", localN);
+  for (int i = 0; YT_ENFORCE_EXEMPT[i] && exemptN < 16; i++) { IPAddress a; if (a.fromString(YT_ENFORCE_EXEMPT[i])) exemptIp[exemptN++] = (uint32_t)a; }
 
   if (!FFat.begin(true)) Serial.println("[adblock] FFat mount failed: no cache, will fetch on every boot");
   else {
     Serial.printf("[adblock] FFat mounted, %u KB free\n", (unsigned)(FFat.freeBytes() / 1024));
+    ffatOk = true;
+    loadSettings();
     if (loadCache()) Serial.printf("[adblock] loaded %u cached domains\n", (unsigned)listCount);
     else Serial.println("[adblock] no cached list yet, will fetch");
   }
@@ -513,13 +587,18 @@ String dnsblockJson() {
   j += ",\"upstream\":[\"" + UPSTREAM_DNS_1.toString() + "\",\"" + UPSTREAM_DNS_2.toString() + "\"]";
   j += ",\"listen\":\"" + WiFi.localIP().toString() + "\",\"local_names\":" + String(localN);
   j += ",\"psram_free_kb\":" + String((unsigned)(ESP.getFreePsram() / 1024)) + ",\"heap_free_kb\":" + String((unsigned)(ESP.getFreeHeap() / 1024));
+  j += ",\"enabled\":"; j += blockingOff ? "false" : "true";
+  j += ",\"yt_enforce\":"; j += ytEnforce ? "true" : "false"; j += ",\"yt_enforced\":" + String((unsigned)ytEnforced);
   j += ",\"total\":" + String(snap.total) + ",\"blocked\":" + String(snap.blocked) + ",\"forwarded\":" + String(snap.forwarded)
      + ",\"timeouts\":" + String(to) + ",\"overflow\":" + String(ov);
   j += ",\"clients\":[";
   for (int i = 0; i < snap.nClients; i++) {
     if (i) j += ",";
     j += "{\"ip\":\"" + IPAddress(snap.clients[i].ip).toString() + "\",\"q\":" + String(snap.clients[i].q)
-       + ",\"b\":" + String(snap.clients[i].b) + ",\"ago_s\":" + String((now - snap.clients[i].lastMs) / 1000) + "}";
+       + ",\"b\":" + String(snap.clients[i].b) + ",\"ago_s\":" + String((now - snap.clients[i].lastMs) / 1000)
+       + ",\"yt_ago_s\":" + String(snap.clients[i].ytMs ? (long)((now - snap.clients[i].ytMs) / 1000) : -1L)
+       + ",\"ext_ago_s\":" + String(snap.clients[i].extMs ? (long)((now - snap.clients[i].extMs) / 1000) : -1L)
+       + ",\"paused_s\":" + String(devicePausedS(snap.clients[i].ip)) + ",\"name\":\"" + jsonEsc(nameOf(snap.clients[i].ip).c_str()) + "\"}";
   }
   j += "],\"recent\":[";
   for (int k = 0; k < snap.recentCount; k++) {
@@ -532,3 +611,138 @@ String dnsblockJson() {
   j += "]}";
   return j;
 }
+
+uint32_t dnsblockPausedSeconds() {
+  uint32_t pu = pausedUntilMs;
+  if (!pu) return 0;
+  int32_t left = (int32_t)(pu - millis());
+  return left > 0 ? (uint32_t)(left / 1000) : 0;
+}
+
+// Clients that looked up www.youtube.com / m.youtube.com (a browser, not the app) in the last withinS seconds.
+int dnsblockYtWatchers(uint32_t* ips, uint32_t* agoS, uint32_t* extAgoS, int max, uint32_t withinS) {
+  uint32_t now = millis(); int n = 0;
+  portENTER_CRITICAL(&statMux);
+  for (int i = 0; i < st.nClients && n < max; i++) {
+    uint32_t ytMs = st.clients[i].ytMs; if (!ytMs) continue;
+    uint32_t ago = (now - ytMs) / 1000;
+    if (ago <= withinS) { ips[n] = st.clients[i].ip; agoS[n] = ago; extAgoS[n] = st.clients[i].extMs ? (now - st.clients[i].extMs) / 1000 : 0xFFFFFFFFu; n++; }
+  }
+  portEXIT_CRITICAL(&statMux);
+  return n;
+}
+
+// The extension checked in (rules fetch or stats post) from this address.
+void dnsblockNoteExtension(uint32_t ip) {
+  uint32_t ms = millis(); if (!ms) ms = 1;
+  portENTER_CRITICAL(&statMux);
+  DnsClient* c = nullptr;
+  for (int i = 0; i < st.nClients; i++) if (st.clients[i].ip == ip) { c = &st.clients[i]; break; }
+  if (!c && st.nClients < MAX_CLIENTS) { c = &st.clients[st.nClients++]; c->ip = ip; c->q = 0; c->b = 0; c->lastMs = ms; c->ytMs = 0; }
+  if (c) c->extMs = ms;
+  portEXIT_CRITICAL(&statMux);
+}
+void     dnsblockSetYtEnforce(bool on) { ytEnforce = on; }
+bool     dnsblockYtEnforce()           { return ytEnforce; }
+uint32_t dnsblockYtEnforced()          { return ytEnforced; }
+
+// ---------------- Runtime settings: files in FFat, one entry per line ----------------
+static const char* CFG_FILE[] = { "/cfg_allow.txt", "/cfg_block.txt", "/cfg_exempt.txt", "/cfg_names.txt" };
+
+static bool validDomain(String& d) {
+  d.trim(); d.toLowerCase();
+  if (d.length() < 3 || d.length() > 63 || d.indexOf('.') < 0 || d.startsWith(".") || d.endsWith(".")) return false;
+  for (size_t i = 0; i < d.length(); i++) { char c = d[i]; if (!(isalnum(c) || c == '.' || c == '-')) return false; }
+  return true;
+}
+static void cleanName(String& n) {
+  n.trim(); String o;
+  for (size_t i = 0; i < n.length() && o.length() < 24; i++) { char c = n[i]; if ((uint8_t)c >= 0x20 && c != '"' && c != '\\' && c != '<' && c != '>') o += c; }
+  n = o;
+}
+static void saveList(int which) {
+  if (!ffatOk) return;
+  int n = snapshotList(which);
+  File f = FFat.open(CFG_FILE[which], FILE_WRITE); if (!f) return;
+  if (which == 3) for (int i = 0; i < n; i++) { f.print(IPAddress(namesCopy[i].ip).toString()); f.print('\t'); f.println(namesCopy[i].name); }
+  else           for (int i = 0; i < n; i++) f.println(cfgCopy[i].text);
+  f.close();
+}
+static bool addEntry(RtEntry* a, int& n, int max, const String& text, uint32_t ip) {
+  uint64_t h = fnv1a(text.c_str(), text.length());
+  bool ok = false;
+  portENTER_CRITICAL(&cfgMux);
+  bool dup = false; for (int i = 0; i < n; i++) if (a[i].h == h) dup = true;
+  if (!dup && n < max) { strncpy(a[n].text, text.c_str(), sizeof(a[n].text) - 1); a[n].text[sizeof(a[n].text) - 1] = 0; a[n].h = h; a[n].ip = ip; n++; ok = true; }
+  portEXIT_CRITICAL(&cfgMux);
+  return ok || dup;
+}
+static bool removeEntry(RtEntry* a, int& n, const String& text) {
+  uint64_t h = fnv1a(text.c_str(), text.length()); bool ok = false;
+  portENTER_CRITICAL(&cfgMux);
+  for (int i = 0; i < n; i++) if (a[i].h == h) { a[i] = a[n - 1]; n--; ok = true; break; }
+  portEXIT_CRITICAL(&cfgMux);
+  return ok;
+}
+static int whichList(const char* w) { if (!strcmp(w, "allow")) return 0; if (!strcmp(w, "block")) return 1; if (!strcmp(w, "exempt")) return 2; return -1; }
+
+bool dnsblockListAdd(const char* which, const char* value, String& err) {
+  int w = whichList(which); String v = value;
+  if (w < 0) { err = "unknown list"; return false; }
+  if (w == 2) { IPAddress a; v.trim(); if (!a.fromString(v)) { err = "not an IPv4 address"; return false; } v = a.toString(); if (!addEntry(rtExempt, rtExemptN, MAX_RT_EXEMPT, v, (uint32_t)a)) { err = "list full"; return false; } }
+  else { if (!validDomain(v)) { err = "not a domain name"; return false; } if (!addEntry(w == 0 ? rtAllow : rtBlock, w == 0 ? rtAllowN : rtBlockN, MAX_RT, v, 0)) { err = "list full"; return false; } }
+  saveList(w); return true;
+}
+bool dnsblockListRemove(const char* which, const char* value) {
+  int w = whichList(which); if (w < 0) return false; String v = value; v.trim(); if (w != 2) v.toLowerCase();
+  bool ok = removeEntry(w == 0 ? rtAllow : w == 1 ? rtBlock : rtExempt, w == 0 ? rtAllowN : w == 1 ? rtBlockN : rtExemptN, v);
+  if (ok) saveList(w); return ok;
+}
+String dnsblockListsJson() {
+  String j; j.reserve(2000);
+  static const char* KEY[] = { "allow", "block", "exempt" };
+  j += "{";
+  for (int w = 0; w < 3; w++) {
+    int n = snapshotList(w);
+    j += "\""; j += KEY[w]; j += "\":[";
+    for (int i = 0; i < n; i++) { if (i) j += ","; j += "\"" + jsonEsc(cfgCopy[i].text) + "\""; }
+    j += "],";
+  }
+  int n = snapshotList(3);
+  j += "\"names\":[";
+  for (int i = 0; i < n; i++) { if (i) j += ","; j += "{\"ip\":\"" + IPAddress(namesCopy[i].ip).toString() + "\",\"name\":\"" + jsonEsc(namesCopy[i].name) + "\"}"; }
+  j += "],\"compiled\":{\"allow\":" + String(allowN) + ",\"block\":" + String(extraN) + ",\"exempt\":" + String(exemptN) + "}}";
+  return j;
+}
+bool dnsblockSetName(uint32_t ip, const char* name) {
+  String n = name; cleanName(n);
+  portENTER_CRITICAL(&cfgMux);
+  int idx = -1; for (int i = 0; i < namesN; i++) if (names[i].ip == ip) idx = i;
+  if (n.length() == 0) { if (idx >= 0) { names[idx] = names[namesN - 1]; namesN--; } }
+  else { if (idx < 0 && namesN < MAX_NAMES) idx = namesN++; if (idx >= 0) { names[idx].ip = ip; strncpy(names[idx].name, n.c_str(), sizeof(names[idx].name) - 1); names[idx].name[sizeof(names[idx].name) - 1] = 0; } }
+  portEXIT_CRITICAL(&cfgMux);
+  saveList(3); return true;
+}
+void dnsblockPauseDevice(uint32_t ip, uint32_t minutes) {
+  uint32_t until = minutes ? millis() + minutes * 60000UL : 0;
+  portENTER_CRITICAL(&cfgMux);
+  int idx = -1; for (int i = 0; i < dpauseN; i++) if (dpause[i].ip == ip) idx = i;
+  if (!minutes) { if (idx >= 0) { dpause[idx] = dpause[dpauseN - 1]; dpauseN--; } }
+  else { if (idx < 0) { if (dpauseN < MAX_DPAUSE) idx = dpauseN++; else idx = 0; } dpause[idx].ip = ip; dpause[idx].untilMs = until ? until : 1; }
+  portEXIT_CRITICAL(&cfgMux);
+}
+static void loadSettings() {
+  for (int w = 0; w < 4; w++) {
+    File f = FFat.open(CFG_FILE[w], FILE_READ); if (!f) continue;
+    while (f.available()) {
+      String line = f.readStringUntil('\n'); line.trim(); if (!line.length()) continue;
+      if (w == 3) { int t = line.indexOf('\t'); if (t < 0) continue; IPAddress a; if (a.fromString(line.substring(0, t))) { String n = line.substring(t + 1); cleanName(n); if (n.length() && namesN < MAX_NAMES) { names[namesN].ip = (uint32_t)a; strncpy(names[namesN].name, n.c_str(), 24); names[namesN].name[24] = 0; namesN++; } } }
+      else if (w == 2) { IPAddress a; if (a.fromString(line)) addEntry(rtExempt, rtExemptN, MAX_RT_EXEMPT, a.toString(), (uint32_t)a); }
+      else if (validDomain(line)) addEntry(w == 0 ? rtAllow : rtBlock, w == 0 ? rtAllowN : rtBlockN, MAX_RT, line, 0);
+    }
+    f.close();
+  }
+  Serial.printf("[adblock] settings: %d allow, %d block, %d exempt, %d names\n", rtAllowN, rtBlockN, rtExemptN, namesN);
+}
+void dnsblockSetEnabled(bool on) { blockingOff = !on; }
+bool dnsblockEnabled()           { return !blockingOff; }

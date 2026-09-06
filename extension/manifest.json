@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "netmon YouTube guard",
+  "version": "0.1.0",
+  "description": "Removes YouTube ads in this browser. Rules and counts are shared through the netmon ESP32 on your LAN.",
+  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
+  "permissions": ["storage", "alarms", "declarativeNetRequest"],
+  "host_permissions": [
+    "*://*.youtube.com/*",
+    "*://*.youtube-nocookie.com/*",
+    "http://adblocker.local/*",
+    "http://192.168.1.53/*",
+    "http://vpn.local/*",
+    "http://192.168.1.54/*",
+    "http://netmon.local/*"
+  ],
+  "background": { "service_worker": "background.js", "scripts": ["background.js"] },
+  "content_scripts": [
+    {
+      "matches": ["*://*.youtube.com/*", "*://*.youtube-nocookie.com/*"],
+      "js": ["prune.js"],
+      "run_at": "document_start",
+      "world": "MAIN",
+      "all_frames": true
+    },
+    {
+      "matches": ["*://*.youtube.com/*", "*://*.youtube-nocookie.com/*"],
+      "js": ["guard.js"],
+      "css": ["hide.css"],
+      "run_at": "document_start",
+      "all_frames": true
+    }
+  ],
+  "declarative_net_request": {
+    "rule_resources": [{ "id": "yt-ads", "enabled": true, "path": "dnr-rules.json" }]
+  },
+  "browser_specific_settings": {
+    "gecko": { "id": "ytguard@netmon.local", "strict_min_version": "128.0" }
+  }
+}

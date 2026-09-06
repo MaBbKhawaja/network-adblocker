@@ -1,4 +1,5 @@
 netmon/secrets.h
 build/
-invidious/upstream/
-invidious/.env
+extension/_metadata/
+.env
+.DS_Store

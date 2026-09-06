@@ -31,8 +31,17 @@ static const char* EXTRA_BLOCK[] = {
 // A queries get the IP; AAAA and others get an empty NOERROR. Keep the trailing entry.
 struct LocalName { const char* name; const char* ip; };
 static const LocalName LOCAL_NAMES[] = {
-  { "yt.home", "192.168.1.152" },   // Invidious, the ad-free YouTube front-end (see ../invidious)
+  // { "nas.home", "192.168.1.20" },
   { nullptr, nullptr }
+};
+
+// "Require the extension for YouTube" (switch on the dashboard, off by default): a device that opens YouTube
+// in a browser without the extension gets 0.0.0.0 for youtube.com until the extension checks in from it.
+// Devices listed here are never held back — phones and TVs can't run the extension. Give them fixed
+// addresses in the router's Static DHCP table first. Keep the trailing nullptr.
+static const char* YT_ENFORCE_EXEMPT[] = {
+  // "192.168.1.151",   // e.g. a phone
+  nullptr
 };
 
 // Where non-blocked queries go. The second is tried if the first doesn't answer in 1.5 s.
