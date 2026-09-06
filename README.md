@@ -2,6 +2,8 @@
 
 Whole-home ad blocking on a £5 ESP32-S3, plus a browser extension for the one thing DNS can't touch: YouTube.
 
+![System diagram: router hands out the board as DNS, devices ask it, blocked ad servers get 0.0.0.0, allowed lookups go to Cloudflare, dashboard and YouTube extension talk to the board](docs/diagram.png)
+
 **What you get**
 - Every device on the Wi‑Fi (phones, apps, TVs, laptops, guests) stops loading ads and trackers. Nothing is installed on
   the devices: the board answers their DNS questions and answers `0.0.0.0` for ~440,000 known ad and tracker domains.
@@ -14,11 +16,8 @@ Whole-home ad blocking on a £5 ESP32-S3, plus a browser extension for the one t
 
 **How it works, in one picture**
 
-```
-phone / laptop / TV                     ESP32 board (192.168.1.53)                 internet
-  "where is ads.tracker.net?"  ──────►  on the 440k list?  yes ──► answers 0.0.0.0   (ad never loads)
-  "where is bbc.co.uk?"        ──────►  no ──► asks Cloudflare 1.1.1.1 ──► real address ──► page loads
-```
+![Flow chart: a phone asks where ads.tracker.net is; the board checks its block list; yes means the answer is 0.0.0.0 and the ad never loads; no means the board asks Cloudflare and the page loads](docs/flowchart.png)
+
 The router tells every device to ask the board first (DHCP), so nothing is configured on the devices. The board only
 ever sees the *question* ("where is X?"), never the page or the video; that is why it can block ad servers but cannot
 touch ads that come from the same server as the content, such as YouTube's, which the browser extension handles instead.
@@ -53,6 +52,7 @@ touch ads that come from the same server as the content, such as YouTube's, whic
 | `extension/` | the browser extension (see `extension/README.md`) |
 | `build.sh` | `secrets`, `compile`, `upload`, `ota`, `monitor`, `all` (`NODE=2` builds for a second board, if you ever add one) |
 | `.env` | every login and address in one place (gitignored); template in `.env.example` |
+| `docs/` | the README pictures and `gen-images.py`, which redraws them with Gemini (`GEMINI_API_KEY` in `.env`) |
 
 ---
 
