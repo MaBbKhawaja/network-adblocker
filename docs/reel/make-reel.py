@@ -23,28 +23,28 @@ FLAT_IMG = ("Flat 2D vector illustration, clean minimal style, soft off-white ba
 VERT = " Vertical 9:16, subject centred and fully inside the frame."
 
 SCENES = [
-  dict(id=1, dur=6, voice="Phone, tablet, TV, laptop. Ads everywhere.",
-       caption=["Ads on every screen", "in my house."],
+  dict(id=1, dur=6, voice="Phones, tablets, TVs, laptops... ads on every single screen in your house. Sound familiar?",
+       caption=["Ads on every screen", "in your house?"],
        image=STYLE_IMG + "A family living room at night: a phone, a tablet, a laptop and a TV all glowing, each screen crowded with colourful pop-up banners and adverts (abstract shapes and blocks, no readable words), slightly overwhelming, warm indoor lamp light." + VERT,
        video="Slow handheld push-in across the living room, the screens flicker as new colourful banner shapes pop up on them, warm lamp light, cinematic, no text."),
-  dict(id=2, dur=6, voice="So I plugged in a chip the size of a stamp.",
-       caption=["So I plugged in this.", "A five-pound chip."],
+  dict(id=2, dur=6, voice="Well, here's the fix. One tiny chip, the size of a postage stamp, plugged into your Wi-Fi.",
+       caption=["Here's the fix.", "One tiny chip. About five pounds."],
        image=STYLE_IMG + "Extreme close-up of a hand plugging a USB cable into a tiny green circuit board the size of a postage stamp, a small LED on the board, on a wooden desk next to a phone charger, calm and clean." + VERT,
        video="The hand pushes the cable in, the tiny LED on the board blinks blue then settles to steady green, gentle rack focus onto the LED, calm, no text."),
-  dict(id=3, dur=8, freeze=4.6, voice="Before any app can show an ad, it asks where to fetch it from. Now my chip answers that question. And for ads, the answer is: nowhere.",
+  dict(id=3, dur=8, freeze=4.6, voice="Here's the trick. Before any app can show you an ad, it has to ask where to fetch it from. Now this little chip answers that question. And for ads, the answer is... nowhere!",
        caption=["Every app first asks:", "\"where is this ad?\"", "", "The chip answers: nowhere.", "", "The ad never arrives."],
        image=FLAT_IMG + "A smartphone icon on the left with an empty speech bubble containing a question mark, a small green circuit-board icon in the centre, and on the right a grey cloud with a banner-shaped advert icon inside it; a dotted line from the chip toward the cloud." + VERT,
        video="Flat 2D animation: the question-mark bubble slides from the phone to the chip, the chip flashes a red cross, the dotted line and the advert cloud fade out and dissolve, smooth minimal motion, no text."),
-  dict(id=4, dur=6, voice="Phones, TVs, guests. Nothing to install. It works the moment you join the Wi-Fi.",
+  dict(id=4, dur=6, voice="Every phone, every TV, even your guests. Nothing to install. The moment you join the Wi-Fi, you're covered.",
        caption=["Works for everyone on the Wi-Fi.", "Nothing to install."],
        image=STYLE_IMG + "The same family living room in soft daylight, now calm: a child smiling at a tablet showing a clean colourful game with no banners, a TV showing a clean nature scene, a laptop with a clean page, relaxed atmosphere." + VERT,
        video="Slow gentle push-in, the child laughs softly at the tablet, screens stay clean and calm, soft daylight, no text."),
-  dict(id=5, dur=6, voice="One exception: YouTube hides its ads inside the video. For that I wrote a small browser add-on.",
+  dict(id=5, dur=6, voice="Now, YouTube is sneaky. It hides its ads inside the video itself. So I built a small browser add-on for that too.",
        caption=["Except YouTube.", "That one needed a browser add-on."],
        image=STYLE_IMG + "Close-up of a laptop screen showing a generic video player with a play button, and in the browser toolbar a small glowing puzzle-piece icon; hands on the keyboard, evening desk light." + VERT,
        video="The puzzle-piece icon glows brighter, the video plays smoothly with no interruption, subtle camera drift, no text."),
-  dict(id=6, dur=6, voice="It's free and open source. Link in bio if you want to build one.",
-       caption=["Open source.", "Link in bio."],
+  dict(id=6, dur=6, voice="And the best part? It's completely free and open source. Link in bio. Go build one!",
+       caption=["Free and open source.", "Link in bio."],
        image=STYLE_IMG + "A hand holding a phone showing a dark dashboard with a bright green status pill and a rising counter (abstract bars, no readable words), the tiny green circuit board lying on the desk beside a coffee cup, morning light." + VERT,
        video="The counter bars on the phone rise, the tiny LED on the board blinks green, gentle handheld movement, no text."),
 ]
@@ -94,9 +94,10 @@ def phase_clips():
 
 def phase_vo():
     (HERE / "vo").mkdir(exist_ok=True)
-    direction = ("You are narrating a short, friendly social-media video for a general audience. Warm, clear, natural, "
-                 "unhurried but energetic; sound like a person explaining something they are proud of, never like a "
-                 "news reader. Speak ONLY the following words, nothing else: ")
+    direction = ("You are ONE single character for the whole video: a charismatic, confident TV-shopping-channel presenter "
+                 "pitching a gadget they built themselves. Upbeat, persuasive and warm, a smile in the voice, punchy pacing "
+                 "with a short dramatic pause before each payoff, never shouting, never robotic, never a news reader. "
+                 "Keep exactly the same persona, pitch and energy in every line. Speak ONLY the following words, nothing else: ")
     for s in SCENES:
         out = HERE / "vo" / f"scene_{s['id']:02d}.wav"
         if out.exists(): print(f"scene {s['id']}: voice exists"); continue
