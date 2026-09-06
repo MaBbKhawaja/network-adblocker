@@ -3,3 +3,10 @@ build/
 extension/_metadata/
 .env
 .DS_Store
+docs/reel/*.png
+docs/reel/*.jpg
+docs/reel/clips/
+docs/reel/vo/
+docs/reel/out/
+docs/reel/*.mp4
+docs/reel/font.ttf
