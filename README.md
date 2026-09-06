@@ -183,3 +183,7 @@ router's Static DHCP first).
 2. **Pi dashboard** with history over weeks, pulling from the boards.
 3. **Android app** as a remote control for the boards (pause, switches, notifications).
 4. **Hot standby**: the second board takes over the first one's address automatically if it dies.
+
+## License
+
+MIT, see `LICENSE`. The blocklists come from StevenBlack, oisd and hagezi under their own terms.
