@@ -7,7 +7,7 @@
 // If the ESP32 is unreachable the last rules from storage are used, then the bundled rules-default.json.
 'use strict';
 const api = globalThis.browser ?? globalThis.chrome;
-const HOSTS = ['http://adblocker.local', 'http://192.168.1.53', 'http://vpn.local', 'http://192.168.1.54', 'http://netmon.local'];
+const HOSTS = ['http://adblocker.local', 'http://192.168.1.53'];
 const RULES_PATH = '/api/yt/rules';
 const STATS_PATH = '/api/yt/stats';
 let pending = { blocked: 0, skipped: 0, hidden: 0 };

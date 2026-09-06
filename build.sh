@@ -13,11 +13,11 @@ PORT="${PORT:-$(nodeget SERIAL_PORT)}"; PORT="${PORT:-/dev/cu.usbmodem2101}"
 # Partition: 3 MB app + 9.9 MB FFat filesystem (caches the blocklist across reboots).
 FQBN="esp32:esp32:esp32s3:CDCOnBoot=cdc,USBMode=hwcdc,FlashSize=16M,PSRAM=opi,PartitionScheme=app3M_fat9M_16MB,UploadSpeed=921600"
 case "${1:-all}" in
-  compile) [[ -n "$NODE" ]] && "$0" secrets; python3 extension/pack.py && arduino-cli compile --fqbn "$FQBN" --warnings default netmon ;;
+  compile) [[ -f .env ]] && "$0" secrets >/dev/null; python3 extension/pack.py && arduino-cli compile --fqbn "$FQBN" --warnings default netmon ;;
   upload)  arduino-cli upload  --fqbn "$FQBN" --port "$PORT" netmon ;;
   monitor) arduino-cli monitor --port "$PORT" --config baudrate=115200 ;;
   ota)     # update a running board over Wi-Fi: [NODE=2] ./build.sh ota   (needs OTA_PASSWORD in .env and a board already running OTA-capable firmware)
-           [[ -n "$NODE" ]] && "$0" secrets; python3 extension/pack.py
+           [[ -f .env ]] && "$0" secrets >/dev/null; python3 extension/pack.py
            arduino-cli compile --fqbn "$FQBN" --output-dir build/netmon netmon
            IP="$(nodeget IP)"; ESPOTA="$(ls -d "$HOME"/Library/Arduino15/packages/esp32/hardware/esp32/*/tools/espota.py | tail -1)"
            echo "uploading to $IP over Wi-Fi"; python3 "$ESPOTA" -r -i "$IP" -p 3232 "--auth=$(envget OTA_PASSWORD)" -f build/netmon/netmon.ino.bin ;;
@@ -29,6 +29,6 @@ case "${1:-all}" in
            printf '#define NTFY_TOPIC  "%s"                 // optional ntfy.sh topic for phone alerts\n' "$(envget NTFY_TOPIC)" >> netmon/secrets.h
            printf '#define OTA_PASS    "%s"     // over-the-air update password ("" = OTA off)\n#define PEER_BOARDS "%s"   // other boards, comma-separated IPs\n' "$(envget OTA_PASSWORD)" "$(nodeget PEERS)" >> netmon/secrets.h
            echo "netmon/secrets.h written from .env${NODE:+ for node $NODE}: $(grep -oE "HOSTNAME_STR \"[^\"]*\"|STATIC_IP +\"[^\"]*\"" netmon/secrets.h | tr "\n" " ")" ;;
-  all)     [[ -n "$NODE" ]] && "$0" secrets; python3 extension/pack.py && arduino-cli compile --fqbn "$FQBN" netmon && arduino-cli upload --fqbn "$FQBN" --port "$PORT" netmon ;;
+  all)     [[ -f .env ]] && "$0" secrets >/dev/null; python3 extension/pack.py && arduino-cli compile --fqbn "$FQBN" netmon && arduino-cli upload --fqbn "$FQBN" --port "$PORT" netmon ;;
   *) echo "usage: [NODE=2] $0 [compile|upload|monitor|all|secrets|ota]" >&2; exit 1 ;;
 esac

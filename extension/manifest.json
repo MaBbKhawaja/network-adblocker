@@ -9,10 +9,7 @@
     "*://*.youtube.com/*",
     "*://*.youtube-nocookie.com/*",
     "http://adblocker.local/*",
-    "http://192.168.1.53/*",
-    "http://vpn.local/*",
-    "http://192.168.1.54/*",
-    "http://netmon.local/*"
+    "http://192.168.1.53/*"
   ],
   "background": { "service_worker": "background.js", "scripts": ["background.js"] },
   "content_scripts": [

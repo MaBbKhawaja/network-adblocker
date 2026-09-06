@@ -24,7 +24,7 @@ Whole-home ad blocking on a £5 ESP32-S3, plus a browser extension for the one t
 ## Hardware
 
 - **ESP32-S3 dev board with 8 MB PSRAM and 16 MB flash** (module marked `ESP32-S3-WROOM-1 N16R8`). The PSRAM holds
-  the blocklist; a board without it falls back to a 20k-domain list. Two identical boards are used here; one is enough.
+  the blocklist; a board without it falls back to a 20k-domain list. One board runs the whole house.
 - A USB **data** cable (charge-only cables light the board but the computer never sees it) and any USB charger.
 - A router whose DHCP settings let you set the DNS servers. Here: Hyperoptic Hyperhub (Zyxel EX3301-T0).
 
@@ -72,7 +72,7 @@ Edit `.env`:
 - `ROUTER_URL/USER/PASSWORD`: from the card on the router. Only used by you; the firmware never sees them.
 - `OTA_PASSWORD`: any random string; it lets you update the board over Wi‑Fi later.
 - Leave `NTFY_TOPIC` empty unless you want phone pushes (see step 8).
-- Second board: `NETMON2_HOST`, `NETMON2_IP`, `NETMON_PEERS` / `NETMON2_PEERS` (each board's list of the others).
+- `NETMON_PEERS`: leave empty. (If you ever run a second board, list its IP here and build it with `NODE=2`.)
 
 ### Step 3 · Flash the board over USB (once per board)
 
@@ -88,8 +88,6 @@ Edit `.env`:
    (or `http://<NETMON_IP>/`). The first boot downloads the three blocklists, which takes about 80 seconds; the badge
    then says **BLOCKING** with a domain count. The list is cached in flash, so later boots take seconds.
 4. Move the board to any USB charger. It only needs the computer for this first flash.
-
-For a second board: `NODE=2 ./build.sh all` with the second board on USB.
 
 ### Step 4 · Test the board on one device
 
@@ -134,8 +132,8 @@ router's Static DHCP first).
 
 ### Step 7 · Daily use: the dashboard
 
-- **Boards**: each board with ONLINE/OFFLINE and its own **Turn off / Turn on** (off = forwards everything, blocks
-  nothing, still answers so nobody loses internet; the other board is unaffected).
+- **Boards**: the board with ONLINE/OFFLINE and a **Turn off / Turn on** switch (off = forwards everything, blocks
+  nothing, still answers so nobody loses internet).
 - **Ad blocker**: totals, **Pause 5 min / 1 hour / Resume** for the whole house, **Update list**.
 - **Devices**: click a device to name it; **Pause 1h** per device; a YouTube-extension yes/no column.
 - **Settings**: **Always allow** (a site and its subdomains), **Always block**, **Exempt from the YouTube rule**.
@@ -146,7 +144,7 @@ router's Static DHCP first).
 
 ### Step 8 · Updates and changes later
 
-- **Firmware over Wi‑Fi**: `./build.sh ota` (first board), `NODE=2 ./build.sh ota` (second). No cable.
+- **Firmware over Wi‑Fi**: `./build.sh ota`. No cable.
 - **Blocklists**: edit `BLOCKLIST_URLS` in `netmon/dnsconfig.h`, then `./build.sh ota`. Accepts hosts format, plain
   domains, `*.domain` wildcards and AdGuard `||domain^`. Budget ~480k unique domains; the three lists here total ~440k.
 - **YouTube rules**: edit `netmon/ytguard.h`, bump `YT_RULES_VERSION`, `./build.sh ota`; browsers refresh within 5 min.
@@ -162,7 +160,6 @@ router's Static DHCP first).
 | Whole house "connected, no internet" | Both boards off and no fallback in DNS Server 2. Plug a board in, or set DNS Server 2 = 1.1.1.1 as in step 5. |
 | A phone still sees ads | It isn't asking the board (not in Devices): reconnect Wi‑Fi, check Private Relay / Private DNS, check the router's IPv6 DNS. |
 | A site or app broke | Recent queries → find the blocked domain → Always allow. |
-| Board shows OFFLINE on the dashboard | Unplugged, or older firmware: `./build.sh ota`. |
 | Computer never sees the board on USB | Charge-only cable. The factory LED demo (purple/green) still lights up. |
 | "Disable developer mode extensions" bubble in Chrome | Normal for an extension not from the store; choose to keep it. |
 | YouTube "site can't be reached" on a laptop | Require the extension is on and this laptop hasn't installed it: http://adblocker.local/extension. |
@@ -182,7 +179,6 @@ router's Static DHCP first).
 1. **Home VPN** on a Raspberry Pi 5 (Tailscale): phones keep the board's blocking on mobile data and away from home.
 2. **Pi dashboard** with history over weeks, pulling from the boards.
 3. **Android app** as a remote control for the boards (pause, switches, notifications).
-4. **Hot standby**: the second board takes over the first one's address automatically if it dies.
 
 ## License
 
