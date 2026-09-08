@@ -19,6 +19,9 @@
 #include <HTTPClient.h>
 #include <Preferences.h>
 #include <time.h>
+#include <FFat.h>
+#include "esp_system.h"     // esp_reset_reason(): why the board (re)booted
+#include "esp_task_wdt.h"   // loop watchdog: reboot instead of hanging
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "secrets.h"
@@ -89,6 +92,49 @@ static int      downStreak = 0;
 static bool     inOutage = false;
 static time_t   firstDownEpoch = 0;
 static time_t   bootEpoch = 0;
+static String   resetReason;          // why this boot happened, e.g. "power-on", "crash (panic)", "task watchdog"
+static String   bootLogJson = "[]";   // the last few boots from /boots.txt: [{"t":epoch,"r":"reason"},...]
+
+static const char* resetReasonName(esp_reset_reason_t r) {
+  switch (r) {
+    case ESP_RST_POWERON:    return "power-on";
+    case ESP_RST_EXT:        return "external reset";
+    case ESP_RST_SW:         return "software restart";
+    case ESP_RST_PANIC:      return "crash (panic)";
+    case ESP_RST_INT_WDT:    return "interrupt watchdog";
+    case ESP_RST_TASK_WDT:   return "task watchdog";
+    case ESP_RST_WDT:        return "other watchdog";
+    case ESP_RST_DEEPSLEEP:  return "deep sleep wake";
+    case ESP_RST_BROWNOUT:   return "brownout (power dip)";
+    case ESP_RST_SDIO:       return "sdio";
+    case ESP_RST_USB:        return "usb reset";
+    case ESP_RST_JTAG:       return "jtag";
+    case ESP_RST_EFUSE:      return "efuse error";
+    case ESP_RST_PWR_GLITCH: return "power glitch";
+    case ESP_RST_CPU_LOCKUP: return "cpu lockup";
+    default:                 return "unknown";
+  }
+}
+
+// Append this boot to /boots.txt (last 12 kept) and build the JSON once; FFat must be mounted (dnsblockBegin).
+static void recordBoot() {
+  String lines;
+  File f = FFat.open("/boots.txt", FILE_READ);
+  if (f) { lines = f.readString(); f.close(); }
+  lines += String((long long)bootEpoch) + " " + resetReason + "\n";
+  int n = 0; for (int i = 0; i < (int)lines.length(); i++) if (lines[i] == '\n') n++;
+  while (n > 12) { lines = lines.substring(lines.indexOf('\n') + 1); n--; }
+  f = FFat.open("/boots.txt", FILE_WRITE);
+  if (f) { f.print(lines); f.close(); }
+  String j = "["; int start = 0; bool first = true;
+  while (start < (int)lines.length()) {
+    int e = lines.indexOf('\n', start); if (e < 0) e = lines.length();
+    String l = lines.substring(start, e); int sp = l.indexOf(' ');
+    if (sp > 0) { if (!first) j += ","; j += "{\"t\":" + l.substring(0, sp) + ",\"r\":\"" + jsonEscape(l.substring(sp + 1)) + "\"}"; first = false; }
+    start = e + 1;
+  }
+  bootLogJson = j + "]";
+}
 static SemaphoreHandle_t mtx;
 static WebServer server(80);
 static Preferences prefs;          // persisted settings (the "require the extension" switch)
@@ -319,6 +365,7 @@ static String statusJson() {
   j += ",\"uptime_s\":" + String(millis() / 1000);
   j += ",\"now\":"  + String((long long)nowEpoch());
   j += ",\"boot\":" + String((long long)bootEpoch);
+  j += ",\"reset_reason\":\"" + jsonEscape(resetReason) + "\",\"boots\":" + bootLogJson;
   j += ",\"rounds\":" + String(rounds);
   j += ",\"interval_ms\":" + String(PROBE_INTERVAL_MS);
   j += ",\"in_outage\":"; j += (inOutage ? "true" : "false");
@@ -395,6 +442,8 @@ void setup() {
 #endif
   delay(300);
   Serial.println("\n[netmon] booting");
+  resetReason = resetReasonName(esp_reset_reason());
+  Serial.printf("[netmon] reset reason: %s\n", resetReason.c_str());
   Serial.printf("[mem] heap %u KB free, psram %u KB\n", (unsigned)(ESP.getFreeHeap() / 1024), (unsigned)(ESP.getPsramSize() / 1024));
 
   mtx = xSemaphoreCreateMutex();
@@ -438,14 +487,15 @@ void setup() {
     ArduinoOTA.setMdnsEnabled(false);
     ArduinoOTA.setHostname(HOSTNAME);
     ArduinoOTA.setPassword(OTA_PASS);
-    ArduinoOTA.onStart([]() { Serial.println("[ota] update starting"); led(0, 0, 255); });
-    ArduinoOTA.onError([](ota_error_t e) { Serial.printf("[ota] error %d\n", (int)e); });
+    ArduinoOTA.onStart([]() { Serial.println("[ota] update starting"); led(0, 0, 255); esp_task_wdt_delete(NULL); });   // receiving blocks loop(), so stop watching it
+    ArduinoOTA.onError([](ota_error_t e) { Serial.printf("[ota] error %d\n", (int)e); esp_task_wdt_add(NULL); });
     ArduinoOTA.begin();
     MDNS.enableArduino(3232, true);
     Serial.println("[ota] ready");
   }
 
   dnsblockBegin();
+  recordBoot();
   prefs.begin("netmon", false);
   dnsblockSetYtEnforce(prefs.getBool("ytEnforce", false));
   dnsblockSetEnabled(prefs.getBool("blocking", true));
@@ -491,10 +541,17 @@ void setup() {
   Serial.printf("[http] dashboard at http://%s/  and  http://%s.local/\n", WiFi.localIP().toString().c_str(), HOSTNAME);
 
   xTaskCreatePinnedToCore(probeTask, "probe", 8192, nullptr, 1, nullptr, 0);
+
+  // Loop watchdog: if the web/OTA loop stalls for 60 s the chip reboots itself instead of sitting dead
+  // (the reboot then shows up as "task watchdog" in the boot log). The blocklist refresh runs in its own task.
+  { esp_task_wdt_config_t wc = { .timeout_ms = 60000, .idle_core_mask = 0, .trigger_panic = true };
+    if (esp_task_wdt_reconfigure(&wc) != ESP_OK) esp_task_wdt_init(&wc);
+    esp_task_wdt_add(NULL); }
   notify("netmon online", "Monitoring " + String(WIFI_SSID) + " — dashboard at http://" + HOSTNAME + ".local");
 }
 
 void loop() {
+  esp_task_wdt_reset();
   server.handleClient();
   if (strlen(OTA_PASS)) ArduinoOTA.handle();
   if (millis() - lastNudgeMs > 60000UL) { lastNudgeMs = millis(); ytNudgeCheck(); }

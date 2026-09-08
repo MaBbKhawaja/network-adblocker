@@ -138,7 +138,7 @@ async function tick(){try{
  $('#cards').innerHTML=html;
  hst.rtt.forEach((a,i)=>spark($('#c'+i),a));spark($('#cd'),hst.dns);
  $('#outages').innerHTML=s.outages.length?s.outages.map(o=>`<tr><td>${fmtT(o.start)}</td><td>${o.end?fmtT(o.end):'<span class="pill">ongoing</span>'}</td><td>${o.end?fmtD(o.end-o.start):fmtD(s.now-o.start)}</td><td>${o.kind==='down_lan'?'Router unreachable':'ISP / upstream'}</td></tr>`).join(''):'<tr><td colspan="4" class="ok">No outages recorded since boot</td></tr>';
- $('#foot').textContent=`netmon + ad blocker on ESP32-S3 · up ${fmtD(s.uptime_s)} · booted ${fmtT(s.boot)} · ${s.rounds} probe rounds · ${s.now?'clock synced':'clock not synced yet'}`;
+ $('#foot').textContent=`netmon + ad blocker on ESP32-S3 · up ${fmtD(s.uptime_s)} · booted ${fmtT(s.boot)} (${esc(s.reset_reason||'?')}) · ${s.rounds} probe rounds · ${s.now?'clock synced':'clock not synced yet'}`;
 }catch(e){$('#status').textContent='Cannot reach netmon';$('#hdr').className='down_lan'}}
 tick();setInterval(tick,5000);
 </script></body></html>)rawliteral";
