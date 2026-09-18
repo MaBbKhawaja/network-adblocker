@@ -550,8 +550,20 @@ void setup() {
   notify("netmon online", "Monitoring " + String(WIFI_SSID) + " — dashboard at http://" + HOSTNAME + ".local");
 }
 
+// Wi-Fi self-heal: the core's auto-reconnect does not recover from every kind of drop (the board sat powered
+// but off the network for hours on 2026-09-18). Nudge a reconnect after 20 s, reboot after 3 minutes.
+static void wifiWatchdog() {
+  static uint32_t lastOkMs = 0, lastKickMs = 0; static bool wasDown = false;
+  if (WiFi.status() == WL_CONNECTED) { lastOkMs = millis(); if (wasDown) { wasDown = false; Serial.println("[wifi] back"); } return; }
+  uint32_t downFor = millis() - lastOkMs;
+  if (!wasDown) { wasDown = true; Serial.println("[wifi] lost connection"); }
+  if (downFor > 180000UL) { Serial.println("[wifi] down for 3 min, rebooting"); delay(100); ESP.restart(); }
+  if (downFor > 20000UL && millis() - lastKickMs > 20000UL) { lastKickMs = millis(); Serial.println("[wifi] reconnecting"); WiFi.disconnect(); delay(50); WiFi.begin(WIFI_SSID, WIFI_PASS); }
+}
+
 void loop() {
   esp_task_wdt_reset();
+  wifiWatchdog();
   server.handleClient();
   if (strlen(OTA_PASS)) ArduinoOTA.handle();
   if (millis() - lastNudgeMs > 60000UL) { lastNudgeMs = millis(); ytNudgeCheck(); }
