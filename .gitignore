@@ -10,3 +10,7 @@ docs/reel/vo/
 docs/reel/out/
 docs/reel/*.mp4
 docs/reel/font.ttf
+.claude-flow/
+.swarm/
+.claude/
+ruvector.db
