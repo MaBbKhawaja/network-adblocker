@@ -1,12 +1,15 @@
 #pragma once
 #include <Arduino.h>
 // DNS sinkhole ("ad blocker"). Call dnsblockBegin() once Wi-Fi and time are up.
+#define DNSBLOCK_CANARY "check.adblocker.home"   // answered with this board's own IP and by nobody else: a device that can fetch it uses the board for DNS
 void   dnsblockBegin();
 String dnsblockJson();                  // stats for /api/dns
 void   dnsblockPause(uint32_t minutes); // temporarily forward everything
 void   dnsblockResume();
 void   dnsblockRequestUpdate();         // refetch the blocklists now
 uint32_t dnsblockPausedSeconds();       // seconds of pause left, 0 = blocking
+bool     dnsblockClientInfo(uint32_t ip, int32_t& agoS, String& name, uint32_t& pausedS);   // one device: seconds since its last DNS query (-1 = never), its name, per-device pause left. false = never seen
+uint32_t dnsblockTotalQueries();        // queries since boot (the silence alert watches this)
 int dnsblockYtWatchers(uint32_t* ips, uint32_t* agoS, uint32_t* extAgoS, int max, uint32_t withinS); // clients that opened YouTube in a browser recently (+ seconds since their extension checked in, 0xFFFFFFFF = never)
 void     dnsblockNoteExtension(uint32_t ip);   // the extension checked in from this address
 void     dnsblockSetYtEnforce(bool on);        // "require the extension for YouTube" switch

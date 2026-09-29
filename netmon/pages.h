@@ -1,6 +1,6 @@
 #pragma once
 #include <Arduino.h>
-// The two web pages the board serves, kept out of netmon.ino on purpose: the Arduino build tool scans the
+// The web pages the board serves, kept out of netmon.ino on purpose: the Arduino build tool scans the
 // sketch for C++ function definitions and trips over JavaScript inside a raw string. Headers are not scanned.
 
 // ---------------- Dashboard (served from flash) ----------------
@@ -44,7 +44,7 @@ a{color:var(--info)}.inp{background:#0b0f14;color:var(--fg);border:1px solid #2b
 <div class="sub" id="absub" style="margin-bottom:12px"></div>
 <div class="grid" id="abstats"></div>
 <div class="two">
- <div class="card scroll"><h3>Devices <span class="meta">· click a name to change it</span></h3><table><thead><tr><th>Device</th><th>Queries</th><th>Blocked</th><th>YouTube ext.</th><th>Last seen</th><th></th></tr></thead><tbody id="clients"></tbody></table></div>
+ <div class="card scroll"><h3>Devices <span class="meta">· click a name to change it · <a href="/check">Am I protected?</a></span></h3><table><thead><tr><th>Device</th><th>Queries</th><th>Blocked</th><th>YouTube ext.</th><th>Last seen</th><th></th></tr></thead><tbody id="clients"></tbody></table></div>
  <div class="card scroll"><h3>Recent queries</h3><table><thead><tr><th>Time</th><th>Client</th><th>Domain</th><th>Type</th><th></th></tr></thead><tbody id="recent"></tbody></table></div>
 </div>
 <h2>YouTube ads (browser extension)</h2>
@@ -174,3 +174,72 @@ a{color:var(--info)}.mut{color:var(--mut)}
 <p>Within a minute of opening a YouTube page, this computer appears under <b>YouTube ads (browser extension)</b> on the <a href="/">dashboard</a>. Devices that open YouTube without it are listed there too.</p>
 <p class="mut">Phones and TVs: this is for browsers only. Use ReVanced or NewPipe on Android and SmartTube on Android TV.</p></div>
 </div></body></html>)rawliteral";
+
+// ---------------- "Am I protected?" page (served at /check) ----------------
+// Fetches a fresh subdomain of the canary name (see DNSBLOCK_CANARY): only this board resolves it, so a browser that
+// gets any answer at all is proven to send its DNS here. /api/check adds the device's name and the pause switches.
+static const char CHECK_HTML[] PROGMEM = R"rawliteral(<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Am I protected? — adblocker</title>
+<style>
+:root{--bg:#0b0f14;--card:#121821;--line:#1f2933;--fg:#e6edf3;--mut:#8b98a5;--ok:#2ecc71;--warn:#f39c12;--bad:#e74c3c;--info:#3b82f6}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.5 -apple-system,system-ui,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:720px;margin:0 auto;padding:28px 20px}h1{font-size:24px;margin:0 0 6px}.sub{color:var(--mut);margin:0 0 22px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;margin-bottom:14px}
+h2{font-size:15px;margin:0 0 10px;color:var(--mut);text-transform:uppercase;letter-spacing:.04em}
+.verdict{text-align:center;padding:28px 20px;border-width:2px}.verdict .big{font-size:34px;font-weight:800;letter-spacing:.02em;line-height:1.1;color:var(--mut)}
+.verdict .why{margin:10px 0 0;font-size:17px}.verdict.ok{border-color:var(--ok)}.verdict.ok .big{color:var(--ok)}
+.verdict.warn{border-color:var(--warn)}.verdict.warn .big{color:var(--warn)}.verdict.bad{border-color:var(--bad)}.verdict.bad .big{color:var(--bad)}
+#extra{text-align:left;margin-top:14px}ul{margin:6px 0 0;padding-left:22px}li{margin:6px 0}
+.btn{display:inline-block;background:var(--info);color:#fff;border:0;font:inherit;font-weight:600;padding:10px 16px;border-radius:8px;margin:16px 0 0;cursor:pointer}.btn:disabled{opacity:.6}
+a{color:var(--info)}.mut{color:var(--mut)}
+.kv{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid var(--line)}.kv:last-child{border-bottom:0}.kv span:first-child{color:var(--mut)}
+</style></head><body><div class="wrap">
+<h1>Am I protected?</h1>
+<p class="sub">Checks whether <b>this device</b> sends its DNS lookups through the ad blocker. Open this page on every phone, tablet and laptop in the house.</p>
+<div class="card verdict" id="v"><div class="big" id="big">CHECKING…</div><p class="why" id="why"></p><div id="extra"></div><button class="btn" id="again" onclick="check()">Check again</button></div>
+<div class="card"><h2>This device</h2>
+<div class="kv"><span>Device</span><span id="dev">—</span></div>
+<div class="kv"><span>Last DNS request from this device</span><span id="ago">—</span></div>
+<div class="kv"><span>Ad blocker</span><span id="blk">—</span></div>
+<div class="kv"><span>Board uptime</span><span id="up">—</span></div>
+</div>
+<p class="mut">Rechecks every 15 s · <a href="/">dashboard</a></p>
+</div>
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmtD=s=>{s=Math.max(0,Math.round(s));if(s<60)return s+' s';if(s<3600)return Math.floor(s/60)+' min '+(s%60)+' s';return Math.floor(s/3600)+' h '+Math.floor(s%3600/60)+' min'};
+let CANARY='check.adblocker.home';   // fallback until /api/check has loaded (its "canary" field is DNSBLOCK_CANARY from dnsblock.h); the two must match
+let R=null,canary=false,at=0,busy=false;
+// Any answer, even an opaque one, means the name resolved: only the board answers it. A fresh subdomain each time
+// so a cached "no such name" from before a fix cannot keep the page red. 8 s cap and one retry: the board's single-client
+// web server can stall for a few seconds (a phone push blocks it), so only two failures in a row count as NOT PROTECTED.
+function probe(){return new Promise(res=>{const ac=new AbortController(),t=setTimeout(()=>{ac.abort();res(false)},8000);
+ fetch('http://c'+Date.now().toString(36)+'.'+CANARY+'/api/ping',{mode:'no-cors',cache:'no-store',signal:ac.signal}).then(()=>{clearTimeout(t);res(true)},()=>{clearTimeout(t);res(false)})})}
+async function ping(){if(await probe())return true;await new Promise(r=>setTimeout(r,1000));return probe();}
+async function check(){if(busy)return;busy=true;$('#again').disabled=true;$('#again').textContent='Checking…';
+ canary=await ping();   // before /api/check, so a successful probe already shows as this device's last DNS request
+ try{R=await fetch('/api/check',{cache:'no-store'}).then(r=>{if(!r.ok)throw 0;return r.json()})}catch(e){R=null}
+ if(R&&R.canary)CANARY=R.canary;
+ at=Date.now();busy=false;$('#again').disabled=false;$('#again').textContent='Check again';render();}
+function render(){if(!at)return;const el=Math.floor((Date.now()-at)/1000);let cls,big,why,extra='';
+ if(!R){cls='bad';big='NO ANSWER';why='The ad blocker did not answer. Is the board on? Try the <a href="/">dashboard</a>.';}
+ else if(!canary){cls='bad';big='NOT PROTECTED';why='This device is not sending its DNS to the ad blocker.';
+  extra=(R.dns_ago_s>=0&&R.dns_ago_s+el<120?'<p><b>Other apps on this device do reach the blocker; only this browser bypasses it.</b></p>':'')+'<p>Usual causes:</p><ul>'+
+   '<li>A VPN or proxy app is on.</li>'+
+   '<li>Android: <b>Private DNS</b> is set to a provider (Settings → Network → Private DNS → Off or Automatic).</li>'+
+   '<li>iPhone / Mac: <b>iCloud Private Relay</b> or <b>Limit IP Address Tracking</b> is on for this Wi-Fi.</li>'+
+   '<li>Chrome / Edge: <b>Secure DNS</b> is on (Settings → Privacy and security → Security).</li>'+
+   '<li>Firefox: built-in <b>DNS over HTTPS</b> is on (Settings → Privacy &amp; Security → DNS over HTTPS → Off).</li>'+
+   '<li>The device has not reconnected to Wi-Fi since the router changed: turn Wi-Fi off and on.</li></ul>';}
+ else if(!R.blocking){cls='warn';big='BLOCKER PAUSED / OFF';const left=R.paused_s-el;
+  why=left>0?'Paused for the whole house, '+fmtD(left)+' left.':R.paused_s>0?'The pause just ended, checking again…':'Switched off on the <a href="/">dashboard</a>.';}
+ else if(R.device_paused_s>0){cls='warn';big='PAUSED FOR THIS DEVICE';const left=R.device_paused_s-el;
+  why=left>0?'Ads show on this device for another '+fmtD(left)+'. Resume it on the <a href="/">dashboard</a>.':'The pause just ended, checking again…';}
+ else{cls='ok';big='PROTECTED';why='Ads are blocked for this device.';}
+ $('#v').className='card verdict '+cls;$('#big').textContent=big;$('#why').innerHTML=why;$('#extra').innerHTML=extra;
+ if(R){$('#dev').innerHTML=R.name?esc(R.name)+' <span class="mut">'+esc(R.ip)+'</span>':esc(R.ip);
+  $('#ago').textContent=R.dns_ago_s<0?'never':fmtD(R.dns_ago_s+el)+' ago';
+  $('#blk').textContent=R.blocking?'on':R.paused_s-el>0?'paused':'off';$('#up').textContent=fmtD(R.uptime_s+el);}}
+check();setInterval(check,15000);setInterval(render,1000);
+</script></body></html>)rawliteral";

@@ -161,7 +161,17 @@ router's Static DHCP first).
   uBlock Origin's filter list is the reference for current key names when YouTube renames something.
 - **Local names** (e.g. `nas.home` → an IP): `LOCAL_NAMES` in `netmon/dnsconfig.h`.
 - **Phone pushes**: set `NTFY_TOPIC` in `.env` to a topic on ntfy.sh and `./build.sh ota`; the board then pushes
-  outage notices and "this device needs the extension" notes.
+  outage notices, "this device needs the extension" notes, "adblocker online" with the reset reason after every boot,
+  "adblocker sees no traffic" when nothing has asked it for DNS in 10 minutes, and "adblocker traffic resumed".
+
+### Am I protected?
+
+Open **http://192.168.1.53/check** (or http://adblocker.local/check) on any phone, tablet or laptop. The page makes the
+browser fetch a fresh name under `check.adblocker.home`, which only the board answers, so a green **PROTECTED** means
+this device's DNS really goes through the ad blocker. Amber means the blocker is paused or switched off, for the house
+or for this device. Red **NOT PROTECTED** lists the usual reasons a device bypasses it: a VPN, Android Private DNS,
+iCloud Private Relay, Chrome's Secure DNS, Firefox's DNS over HTTPS, or a Wi‑Fi connection that predates the router
+change. It rechecks every 15 seconds, so fix the setting and watch it turn green.
 
 ### Troubleshooting
 
@@ -199,6 +209,9 @@ do the same. `GET` reads, `POST` changes. Replace `adblocker.local` with the boa
 | `GET /api/yt/rules` | The rule set the extension downloads (what to strip, hide, skip) | |
 | `POST /api/yt/stats` | Used by the extension to report what it removed (JSON body) | |
 | `POST /api/yt/enforce?on=1\|0` | Require the extension for YouTube in browsers (remembered across reboots) | |
+| `GET /api/check` | Is the device making the call protected: its IP and name, seconds since it last asked the board for DNS (-1 = never), the pause switches, the canary name | `curl http://adblocker.local/api/check` |
+| `GET /api/ping` | Always `{"ok":true}`: the target of the `check.adblocker.home` canary the check page fetches | |
+| `GET /check` | "Am I protected?" page: a green / amber / red verdict for the device that opens it | open in a browser |
 | `GET /extension` | The install page for the extension | open in a browser |
 | `GET /extension/ytguard.zip` | The extension itself, zipped | |
 

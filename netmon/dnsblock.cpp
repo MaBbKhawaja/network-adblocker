@@ -49,6 +49,7 @@ static int      allowN = 0, extraN = 0;
 static const int      MAX_LOCAL = 16;             // LOCAL_NAMES answered by this board
 static const uint32_t LOCAL_TTL = 120;
 static uint64_t localH[MAX_LOCAL]; static uint8_t localIp[MAX_LOCAL][4]; static int localN = 0;
+static uint8_t  canaryIp[4];                      // DNSBLOCK_CANARY -> this board's address, so /check can prove a device's DNS comes here
 
 struct Pending {
   bool used; uint8_t tries; uint16_t ourId, origId, clientPort, len;
@@ -137,8 +138,14 @@ static String jsonEsc(const char* s) {
   return o;
 }
 
-// Is this name (or any parent domain) blocked?
+// The canary is also answered for any name under it: the /check page probes a fresh subdomain each time, because a
+// public resolver caches "no such name" for a nonexistent .home name for up to a day and the device would stay red.
+static bool isCanary(const char* name) {
+  size_t n = strlen(name), c = sizeof(DNSBLOCK_CANARY) - 1;
+  return n >= c && !strcmp(name + n - c, DNSBLOCK_CANARY) && (n == c || name[n - c - 1] == '.');
+}
 static const uint8_t* localLookup(const char* name) {
+  if (isCanary(name)) { IPAddress me = WiFi.localIP(); for (int k = 0; k < 4; k++) canaryIp[k] = me[k]; return canaryIp; }   // re-read: DHCP may have moved us
   if (!localN) return nullptr;
   uint64_t h = fnv1a(name, strlen(name));
   for (int i = 0; i < localN; i++) if (localH[i] == h) return localIp[i];
@@ -174,6 +181,7 @@ static String nameOf(uint32_t ip) {             // "" when unnamed
   return String(buf);
 }
 
+// Is this name (or any parent domain) blocked?
 static bool isBlocked(const char* name) {
   size_t total = strlen(name);
   if (!total) return false;
@@ -202,7 +210,7 @@ static bool extRecent(uint32_t ip) {
   return r;
 }
 
-static void noteQuery(uint32_t ip, const char* name, uint16_t qtype, bool blocked) {
+static void noteQuery(uint32_t ip, const char* name, uint16_t qtype, bool blocked, bool logRecent) {
   uint32_t t = (uint32_t)epochNow(), ms = millis();
   portENTER_CRITICAL(&statMux);
   st.total++; if (blocked) st.blocked++; else st.forwarded++;
@@ -215,11 +223,13 @@ static void noteQuery(uint32_t ip, const char* name, uint16_t qtype, bool blocke
   }
   c->q++; if (blocked) c->b++; c->lastMs = ms;
   if (!strcasecmp(name, "www.youtube.com") || !strcasecmp(name, "m.youtube.com")) c->ytMs = ms ? ms : 1;
-  Recent& r = st.recent[st.recentHead];
-  r.t = t; r.ip = ip; r.qtype = qtype; r.blocked = blocked;
-  strncpy(r.name, name, sizeof(r.name) - 1); r.name[sizeof(r.name) - 1] = 0;
-  st.recentHead = (st.recentHead + 1) % MAX_RECENT;
-  if (st.recentCount < MAX_RECENT) st.recentCount++;
+  if (logRecent) {
+    Recent& r = st.recent[st.recentHead];
+    r.t = t; r.ip = ip; r.qtype = qtype; r.blocked = blocked;
+    strncpy(r.name, name, sizeof(r.name) - 1); r.name[sizeof(r.name) - 1] = 0;
+    st.recentHead = (st.recentHead + 1) % MAX_RECENT;
+    if (st.recentCount < MAX_RECENT) st.recentCount++;
+  }
   portEXIT_CRITICAL(&statMux);
 }
 
@@ -281,7 +291,7 @@ static void onClientPacket(AsyncUDPPacket& p) {
   bool blocked = !local && !paused && isBlocked(name);
   // "Require the extension": hold YouTube back from browsers that have no extension checking in
   if (!blocked && !local && !paused && ytEnforce && isYtBrowserName(name) && !ytExempt(ip) && !extRecent(ip)) { blocked = true; ytEnforced = ytEnforced + 1; }
-  noteQuery(ip, name, qtype, blocked);
+  noteQuery(ip, name, qtype, blocked, local != canaryIp);   // the /check probe counts for the device but stays out of the recent list
 
   if ((blocked || local) && qend <= 300) {
     uint8_t out[300 + 32];
@@ -618,6 +628,18 @@ uint32_t dnsblockPausedSeconds() {
   int32_t left = (int32_t)(pu - millis());
   return left > 0 ? (uint32_t)(left / 1000) : 0;
 }
+
+// One device, for /api/check. "Seen" means it sent at least one DNS query; an extension check-in alone does not count.
+bool dnsblockClientInfo(uint32_t ip, int32_t& agoS, String& name, uint32_t& pausedS) {
+  uint32_t now = millis(), last = 0; bool seen = false;
+  portENTER_CRITICAL(&statMux);
+  for (int i = 0; i < st.nClients; i++) if (st.clients[i].ip == ip) { seen = st.clients[i].q > 0; last = st.clients[i].lastMs; break; }
+  portEXIT_CRITICAL(&statMux);
+  agoS = seen ? (int32_t)((now - last) / 1000) : -1;
+  name = nameOf(ip); pausedS = devicePausedS(ip);   // each takes its own snapshot under cfgMux; the String is built outside
+  return seen;
+}
+uint32_t dnsblockTotalQueries() { uint32_t t; portENTER_CRITICAL(&statMux); t = st.total; portEXIT_CRITICAL(&statMux); return t; }
 
 // Clients that looked up www.youtube.com / m.youtube.com (a browser, not the app) in the last withinS seconds.
 int dnsblockYtWatchers(uint32_t* ips, uint32_t* agoS, uint32_t* extAgoS, int max, uint32_t withinS) {
